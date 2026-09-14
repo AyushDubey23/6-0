@@ -1,5 +1,12 @@
 User-agent: *
 Allow: /
 
+User-agent: Googlebot
+Allow: /
+
+User-agent: Googlebot-Image
+Allow: /
+
 # Canonical Sitemaps for Googlebot, Bingbot & Search Engines
 Sitemap: https://6a0.vercel.app/sitemap.xml
+

@@ -133,7 +133,7 @@ function updateRouteSEO(title, description, path) {
   const canonical = document.querySelector('link[rel="canonical"]');
   if (canonical) {
     const base = window.location.origin || "https://6a0.vercel.app";
-    canonical.setAttribute("href", `${base}/#${path}`);
+    canonical.setAttribute("href", `${base}/`);
   }
 }
 

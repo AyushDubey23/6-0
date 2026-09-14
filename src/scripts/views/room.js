@@ -322,15 +322,15 @@ export function renderRoom(viewport, roomCode) {
         const allReady = participantUids.length > 0 && participantUids.every(uid => roomData.squads?.[uid]?.ready);
 
         if (allReady) {
-          update(ref(rtdb, `rooms/${roomCode}`), {
-            status: "toss",
-            tossState: {
-              flipped: false,
-              winnerUid: null,
-              decision: null,
-              flippedBy: null
-            }
-          });
+          const tossWinnerUid = participantUids[Math.floor(Math.random() * participantUids.length)] || (auth.currentUser ? auth.currentUser.uid : "");
+          const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
+          update(ref(rtdb, `rooms/${roomCode}/tossState`), {
+            flipped: true,
+            winnerUid: tossWinnerUid,
+            decision: tossDecision,
+            flippedBy: "system"
+          }).catch(e => console.warn(e));
+          runClientSimulationFallback(roomCode, roomData, tossWinnerUid, tossDecision).catch(e => console.warn(e));
           return;
         }
 
@@ -802,24 +802,36 @@ function renderDraftPhase(viewport, roomCode, room) {
       timerInterval = null;
     }
     if (room.status === "drafting") {
-      updateRoomData(roomCode, {
-        status: "placing",
-        "draftState/activePlayerUid": null,
-        "draftState/turnDeadline": null,
-        "draftState/currentReveal": null
-      });
+      const tossWinnerUid = participantUids[Math.floor(Math.random() * participantUids.length)] || currentUid;
+      const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
+
       viewport.innerHTML = `
         <div class="text-center" style="margin-top: 10vh; padding: 2rem;">
           <div style="display: inline-block; background: #C89B3C; color: #111111; font-weight: 900; font-size: 0.9rem; padding: 4px 14px; border: 2px solid #1E1E1E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1.5rem; box-shadow: 3px 3px 0px #1E1E1E;">
             ★ DRAFT COMPLETE ★
           </div>
           <h2 style="font-size: 2.2rem; font-weight: 900; color: #111111;">Squads Fully Assembled!</h2>
-          <p style="color: var(--chalk-white-dim); margin-top: 0.75rem; font-weight: 700;">All 11 players drafted on the ground. Loading pitch lineups and match center...</p>
+          <p style="color: #444444; margin-top: 0.75rem; font-weight: 700;">All 11 players drafted on the ground. Loading pitch lineups and match center...</p>
           <div class="mt-4">
-            <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">Advancing to Playing XI...</span>
+            <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">⚡ Entering Match Center Simulation...</span>
           </div>
         </div>
       `;
+
+      updateRoomData(roomCode, {
+        status: "simulating",
+        "draftState/activePlayerUid": null,
+        "draftState/turnDeadline": null,
+        "draftState/currentReveal": null,
+        "tossState": {
+          flipped: true,
+          winnerUid: tossWinnerUid,
+          decision: tossDecision,
+          flippedBy: "system"
+        }
+      }).catch(e => console.warn("updateRoomData error:", e));
+
+      runClientSimulationFallback(roomCode, room, tossWinnerUid, tossDecision).catch(e => console.warn("runClientSimulationFallback error:", e));
     }
     return;
   }
@@ -1543,11 +1555,38 @@ function renderDraftPhase(viewport, roomCode, room) {
         const ar1P = filledSlots.find(p => String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40) || filledSlots[3];
         const ar2P = filledSlots.find(p => String(p.id) !== String(ar1P?.id) && (String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40)) || filledSlots[4];
 
+        const finalizedUserSlots = updatedSlots.map(p => {
+          if (!p) return null;
+          return {
+            ...p,
+            isCaptain: String(p.id) === String(cP?.id),
+            isViceCaptain: String(p.id) === String(vcP?.id),
+            isWicketkeeper: String(p.id) === String(wkP?.id),
+            isWK: String(p.id) === String(wkP?.id),
+            isArBowler1: String(p.id) === String(ar1P?.id),
+            isArBowler2: String(p.id) === String(ar2P?.id)
+          };
+        });
+
+        updates[`rooms/${roomCode}/squads/${currentUid}/slots`] = finalizedUserSlots;
+        updates[`rooms/${roomCode}/squads/${currentUid}/ready`] = true;
         updates[`rooms/${roomCode}/squads/${currentUid}/captainId`] = cP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/viceCaptainId`] = vcP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/keeperId`] = wkP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/arBowler1Id`] = ar1P?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/arBowler2Id`] = ar2P?.id || "";
+
+        const mergedSquads = { ...(room.squads || {}) };
+        mergedSquads[currentUid] = {
+          ...(mergedSquads[currentUid] || {}),
+          slots: finalizedUserSlots,
+          ready: true,
+          captainId: cP?.id || "",
+          viceCaptainId: vcP?.id || "",
+          keeperId: wkP?.id || "",
+          arBowler1Id: ar1P?.id || "",
+          arBowler2Id: ar2P?.id || ""
+        };
 
         // If remaining participants needing picks are bots, fill their remaining slots immediately!
         if (allRemainingAreBots) {
@@ -1597,11 +1636,70 @@ function renderDraftPhase(viewport, roomCode, room) {
             updates[`rooms/${roomCode}/squads/${botUid}/keeperId`] = botWkP?.id || "";
             updates[`rooms/${roomCode}/squads/${botUid}/arBowler1Id`] = botAr1P?.id || "";
             updates[`rooms/${roomCode}/squads/${botUid}/arBowler2Id`] = botAr2P?.id || "";
+
+            mergedSquads[botUid] = {
+              slots: updatedBotSlots,
+              ready: true,
+              captainId: botCP?.id || "",
+              viceCaptainId: botVcP?.id || "",
+              keeperId: botWkP?.id || "",
+              arBowler1Id: botAr1P?.id || "",
+              arBowler2Id: botAr2P?.id || ""
+            };
           });
         }
-        updates[`rooms/${roomCode}/status`] = "placing";
+
         updates[`rooms/${roomCode}/draftState/activePlayerUid`] = null;
         updates[`rooms/${roomCode}/draftState/turnDeadline`] = null;
+        updates[`rooms/${roomCode}/draftState/currentReveal`] = null;
+
+        const participantUids = (turnOrder && turnOrder.length > 0) ? turnOrder : Object.keys(room.players || {});
+        const allDone = participantUids.every(uid => {
+          if (uid === currentUid) return true;
+          if (allRemainingAreBots && remainingNeedPicks.includes(uid)) return true;
+          return mergedSquads[uid]?.ready;
+        });
+
+        if (allDone) {
+          const tossWinnerUid = participantUids[Math.floor(Math.random() * participantUids.length)] || currentUid;
+          const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
+          updates[`rooms/${roomCode}/tossState`] = {
+            flipped: true,
+            winnerUid: tossWinnerUid,
+            decision: tossDecision,
+            flippedBy: "system"
+          };
+          updates[`rooms/${roomCode}/status`] = "simulating";
+
+          viewport.innerHTML = `
+            <div class="text-center" style="margin-top: 10vh; padding: 2rem;">
+              <div style="display: inline-block; background: #C89B3C; color: #111111; font-weight: 900; font-size: 0.9rem; padding: 4px 14px; border: 2px solid #1E1E1E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1.5rem; box-shadow: 3px 3px 0px #1E1E1E;">
+                ★ DRAFT COMPLETE ★
+              </div>
+              <h2 style="font-size: 2.2rem; font-weight: 900; color: #111111;">Playing XI Finalized!</h2>
+              <p style="color: #444444; margin-top: 0.75rem; font-weight: 700;">Final player drafted. Launching match simulation engine...</p>
+              <div class="mt-4">
+                <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">⚡ Entering Match Center Simulation...</span>
+              </div>
+            </div>
+          `;
+
+          try {
+            await updateRoomData(roomCode, updates);
+            const simulatedRoom = {
+              ...room,
+              squads: mergedSquads,
+              tossState: { flipped: true, winnerUid: tossWinnerUid, decision: tossDecision }
+            };
+            await runClientSimulationFallback(roomCode, simulatedRoom, tossWinnerUid, tossDecision);
+            showToast(`Drafted ${formatPlayerName(targetPlayer)} into Playing XI! Launching match simulation!`);
+            return;
+          } catch (simErr) {
+            console.error("Simulation launch error:", simErr);
+          }
+        } else {
+          updates[`rooms/${roomCode}/status`] = "placing";
+        }
       } else {
         // Find next human participant who needs picks
         let nextTurnIndex = currentTurnIndex;
@@ -2159,10 +2257,10 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
   }
 
   const isFinalizable = totalPlaced === 11 &&
-                        effectiveCaptainId &&
-                        effectiveViceCaptainId &&
-                        effectiveKeeperId &&
-                        effectiveCaptainId !== effectiveViceCaptainId &&
+                        Boolean(effectiveCaptainId) &&
+                        Boolean(effectiveViceCaptainId) &&
+                        Boolean(effectiveKeeperId) &&
+                        String(effectiveCaptainId) !== String(effectiveViceCaptainId) &&
                         !spectatorSquad.ready;
 
   viewport.innerHTML = `
@@ -2337,7 +2435,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
                     <span style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem; font-weight: 900; color: #111111;">Select Captain (C - 2x points):</span>
                     <select id="captain-select" style="width: 100%; background: #FFFFFF; color: #111111 !important; border: 2px solid #1E1E1E; padding: 0.6rem 0.85rem; font-weight: 800; font-size: 0.95rem; border-radius: 0px; outline: none; cursor: pointer;">
                       <option value="">-- Choose Captain --</option>
-                      ${slots.filter(s => s !== null && s.id !== (spectatorSquad.viceCaptainId || effectiveViceCaptainId)).map(p => `<option value="${p.id}" ${p.id === (spectatorSquad.captainId || effectiveCaptainId) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
+                      ${slots.filter(s => s !== null && String(s.id) !== String(spectatorSquad.viceCaptainId || effectiveViceCaptainId)).map(p => `<option value="${p.id}" ${String(p.id) === String(spectatorSquad.captainId || effectiveCaptainId) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
                     </select>
                   </label>
 
@@ -2345,7 +2443,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
                     <span style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem; font-weight: 900; color: #111111;">Select Vice-Captain (VC - 1.5x points):</span>
                     <select id="vice-captain-select" style="width: 100%; background: #FFFFFF; color: #111111 !important; border: 2px solid #1E1E1E; padding: 0.6rem 0.85rem; font-weight: 800; font-size: 0.95rem; border-radius: 0px; outline: none; cursor: pointer;">
                       <option value="">-- Choose Vice-Captain --</option>
-                      ${slots.filter(s => s !== null && s.id !== (spectatorSquad.captainId || effectiveCaptainId)).map(p => `<option value="${p.id}" ${p.id === (spectatorSquad.viceCaptainId || effectiveViceCaptainId) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
+                      ${slots.filter(s => s !== null && String(s.id) !== String(spectatorSquad.captainId || effectiveCaptainId)).map(p => `<option value="${p.id}" ${String(p.id) === String(spectatorSquad.viceCaptainId || effectiveViceCaptainId) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
                     </select>
                   </label>
 
@@ -2353,7 +2451,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
                     <span style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem; font-weight: 900; color: #111111;">Select Wicketkeeper (WK):</span>
                     <select id="keeper-select" style="width: 100%; background: #FFFFFF; color: #111111 !important; border: 2px solid #1E1E1E; padding: 0.6rem 0.85rem; font-weight: 800; font-size: 0.95rem; border-radius: 0px; outline: none; cursor: pointer;">
                       <option value="">-- Choose Wicketkeeper --</option>
-                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${p.id === (spectatorSquad.keeperId || effectiveKeeperId) || p.isWicketkeeper || p.role === 'keeper' ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
+                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${String(p.id) === String(spectatorSquad.keeperId || effectiveKeeperId) || p.isWicketkeeper || p.role === 'keeper' ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)}</option>`).join("")}
                     </select>
                   </label>
 
@@ -2361,7 +2459,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
                     <span style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem; font-weight: 900; color: #111111;">Select 1st All-Rounder Bowler (Key 5th Bowler):</span>
                     <select id="ar-bowler-1-select" style="width: 100%; background: #FFFFFF; color: #111111 !important; border: 2px solid #1E1E1E; padding: 0.6rem 0.85rem; font-weight: 800; font-size: 0.95rem; border-radius: 0px; outline: none; cursor: pointer;">
                       <option value="">-- Choose 1st All-Rounder Bowler --</option>
-                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${p.id === (spectatorSquad.arBowler1Id || effectiveArBowler1Id) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)} (${p.role || 'All-Rounder'})</option>`).join("")}
+                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${String(p.id) === String(spectatorSquad.arBowler1Id || effectiveArBowler1Id) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)} (${p.role || 'All-Rounder'})</option>`).join("")}
                     </select>
                   </label>
 
@@ -2369,7 +2467,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
                     <span style="display: block; margin-bottom: 0.35rem; font-size: 0.85rem; font-weight: 900; color: #111111;">Select 2nd All-Rounder Bowler (Key 6th Bowler):</span>
                     <select id="ar-bowler-2-select" style="width: 100%; background: #FFFFFF; color: #111111 !important; border: 2px solid #1E1E1E; padding: 0.6rem 0.85rem; font-weight: 800; font-size: 0.95rem; border-radius: 0px; outline: none; cursor: pointer;">
                       <option value="">-- Choose 2nd All-Rounder Bowler --</option>
-                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${p.id === (spectatorSquad.arBowler2Id || effectiveArBowler2Id) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)} (${p.role || 'All-Rounder'})</option>`).join("")}
+                      ${slots.filter(s => s !== null).map(p => `<option value="${p.id}" ${String(p.id) === String(spectatorSquad.arBowler2Id || effectiveArBowler2Id) ? 'selected' : ''}>#${getJerseyNumber(p)} - ${formatPlayerName(p)} (${p.role || 'All-Rounder'})</option>`).join("")}
                     </select>
                   </label>
 
@@ -2585,20 +2683,22 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
           const uids = Object.keys(updatedRoom.players || {});
           const allReady = uids.length > 0 && uids.every(uid => updatedRoom.squads?.[uid]?.ready);
 
-          if (allReady && updatedRoom.status !== "toss" && updatedRoom.status !== "simulating") {
-            await update(ref(rtdb, `rooms/${roomCode}`), {
-              status: "toss",
-              tossState: {
-                flipped: false,
-                winnerUid: null,
-                decision: null,
-                flippedBy: null
-              }
+          if (allReady && updatedRoom.status !== "simulating") {
+            const tossWinnerUid = uids[Math.floor(Math.random() * uids.length)] || currentUid;
+            const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
+            await update(ref(rtdb, `rooms/${roomCode}/tossState`), {
+              flipped: true,
+              winnerUid: tossWinnerUid,
+              decision: tossDecision,
+              flippedBy: "system"
             });
+            await runClientSimulationFallback(roomCode, updatedRoom, tossWinnerUid, tossDecision);
+            showToast("Playing XI locked! Launching match simulation!");
+            return;
           }
         }
 
-        showToast("Roster locked successfully! Moving to official Coin Toss...");
+        showToast("Roster locked successfully! Moving to match simulation...");
       } catch (err) {
         const topLock = document.getElementById("lock-squad-btn");
         const btmLock = document.getElementById("lock-squad-btn-bottom");
@@ -2611,8 +2711,8 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
     document.getElementById("lock-squad-btn")?.addEventListener("click", handleLockSubmit);
     document.getElementById("lock-squad-btn-bottom")?.addEventListener("click", handleLockSubmit);
 
-    // Auto-advance timer: 5 seconds countdown to lock squad and begin match
-    let autoLockSec = 5;
+    // Auto-advance timer: 2 seconds countdown to lock squad and begin match
+    let autoLockSec = 2;
     const autoTimerBadge = document.getElementById("auto-lock-countdown");
     if (autoTimerBadge && isFinalizable) {
       if (window.placingAutoTimer) clearInterval(window.placingAutoTimer);
@@ -2631,16 +2731,16 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
   // Auto check if all players ready in placing phase
   const playerUids = Object.keys(room.players || {});
   const allReady = playerUids.length > 0 && playerUids.every(uid => room.squads?.[uid]?.ready);
-  if (allReady && room.status !== "toss" && room.status !== "simulating") {
-    update(ref(rtdb, `rooms/${roomCode}`), {
-      status: "toss",
-      tossState: {
-        flipped: false,
-        winnerUid: null,
-        decision: null,
-        flippedBy: null
-      }
-    });
+  if (allReady && room.status !== "simulating") {
+    const tossWinnerUid = playerUids[Math.floor(Math.random() * playerUids.length)] || currentUid;
+    const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
+    update(ref(rtdb, `rooms/${roomCode}/tossState`), {
+      flipped: true,
+      winnerUid: tossWinnerUid,
+      decision: tossDecision,
+      flippedBy: "system"
+    }).catch(e => console.warn(e));
+    runClientSimulationFallback(roomCode, room, tossWinnerUid, tossDecision).catch(e => console.warn(e));
   }
 }
 

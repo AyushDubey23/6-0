@@ -15,7 +15,7 @@
 
   <!-- Top Decorative Header Bar -->
   <rect x="36" y="36" width="1128" height="48" fill="#1E1E1E"/>
-  <text x="60" y="68" class="mono" font-size="18" fill="#FFD54F" letter-spacing="2">OFFICIAL TOURNAMENT EDITION &bull; SIMULATION PLATFORM</text>
+  <text x="60" y="68" class="mono" font-size="18" fill="#FFD54F" letter-spacing="2">OFFICIAL TOURNAMENT EDITION • SIMULATION PLATFORM</text>
   <text x="1130" y="68" class="mono" font-size="18" fill="#FFFFFF" text-anchor="end">2026</text>
 
   <!-- Left Content Column -->

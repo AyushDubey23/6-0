@@ -255,6 +255,16 @@ function renderScoutedSquad() {
         await saveSquad();
         currentScoutedSquad = null; // Clear scouted squad after successful pick
         showToast(`Drafted ${playerObj.name}!`);
+
+        const isNowComplete = activeCampaign.squadXI.every(p => p !== null);
+        if (isNowComplete) {
+          showToast(`Playing XI Complete! Advancing to Squad Review...`);
+          setTimeout(() => {
+            window.location.hash = "#/squad";
+          }, 700);
+          return;
+        }
+
         renderDraftLayout(document.getElementById("app-viewport"));
       }
     });
