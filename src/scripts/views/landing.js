@@ -54,8 +54,8 @@ export async function renderLanding(container) {
   container.innerHTML = `
     <!-- Top Quick-Access Pill Navigation Bar -->
     <div class="hero-pill-bar">
-      <a href="#/draft" class="hero-nav-pill pill-active" title="Launch instant solo draft run">
-        <span class="pill-dot"></span> DAILY CAMPAIGN
+      <a href="#/draft" class="hero-nav-pill pill-active" title="Launch solo draft run">
+        <span class="pill-dot"></span> SOLO DRAFT
       </a>
       <a href="#/leaderboard" class="hero-nav-pill" title="View global rankings & best NRR">
         🏆 LEADERBOARD <span class="pill-new-tag">NEW</span>
@@ -224,7 +224,7 @@ export async function renderLanding(container) {
           <span class="role-badge all-rounder" style="background: #C89B3C; color: #111; font-weight: 900; font-size: 0.72rem; padding: 2px 8px; border: 1px solid #1E1E1E;">MULTIPLAYER ARENA</span>
           <h2 style="font-size: 1.5rem; margin: 0.35rem 0 0 0; font-weight: 950; color: #111111; text-transform: uppercase;">Host or Join a Live Draft Room</h2>
         </div>
-        <span style="font-size: 0.8rem; font-weight: 800; color: #666666;">2-Player Duels &bull; 4-Player Cups &bull; Live Synchronization</span>
+        <span style="font-size: 0.8rem; font-weight: 800; color: #666666;">1v1 Head-to-Head Duels &bull; Live Synchronization</span>
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 1.5rem; align-items: start;">
@@ -235,13 +235,12 @@ export async function renderLanding(container) {
           </h3>
 
           <div style="display: flex; flex-direction: column; gap: 1rem;">
-            <!-- Mode Selector -->
+            <!-- Mode (1v1 Duel) -->
             <div>
               <span style="display: block; font-size: 0.85rem; color: #111111; margin-bottom: 0.35rem; font-weight: 800;">Match Mode:</span>
-              <div class="speed-buttons">
-                <button class="speed-btn mode-select-btn active" data-mode="duel">2-Player Duel</button>
-                <button class="speed-btn mode-select-btn" data-mode="cup">4-Player Cup</button>
-                <button class="speed-btn mode-select-btn" data-mode="solo">Solo Campaign</button>
+              <div style="background: #FAF6ED; border: 2px solid #1E1E1E; padding: 0.55rem 0.85rem; font-weight: 900; font-size: 0.9rem; color: #111111; display: flex; align-items: center; justify-content: space-between;">
+                <span>⚔️ 1v1 Head-to-Head Duel</span>
+                <span style="font-size: 0.72rem; color: #E53926; font-weight: 900; background: #FFFFFF; padding: 2px 6px; border: 1px solid #1E1E1E;">2 PLAYERS</span>
               </div>
             </div>
 
@@ -401,8 +400,8 @@ export async function renderLanding(container) {
           </div>
 
           <div>
-            <strong style="color: #111111; font-size: 0.95rem;">05. MULTIPLAYER DUEL:</strong>
-            <p style="margin: 0.25rem 0 0 0;">Draft against friends in live synchronized rooms with 20s-45s turn clocks, live spectator views, and head-to-head match battles.</p>
+            <strong style="color: #111111; font-size: 0.95rem;">05. 1V1 MULTIPLAYER DUEL:</strong>
+            <p style="margin: 0.25rem 0 0 0;">Draft head-to-head against a friend in a live synchronized room with 20s–45s turn clocks, followed by a simulated match battle between your Playing XIs.</p>
           </div>
         </div>
 
@@ -413,19 +412,10 @@ export async function renderLanding(container) {
     </div>
   `;
 
-  // UI state toggles logic for Room Creator
-  let activeMode = "duel";
+  // UI state toggles logic for Room Creator (strictly 1v1 duel)
+  const activeMode = "duel";
   let activeDiff = "openBook";
   let activeTimer = 20;
-
-  const modeBtns = container.querySelectorAll(".mode-select-btn");
-  modeBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      modeBtns.forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      activeMode = btn.getAttribute("data-mode");
-    });
-  });
 
   const diffBtns = container.querySelectorAll(".diff-select-btn");
   diffBtns.forEach(btn => {
@@ -691,23 +681,17 @@ export async function renderLanding(container) {
           return;
         }
 
-        // Auto-delete 4-player cup rooms in lobby if game hasn't started after 5 minutes
-        if (r.mode === "cup" && elapsed >= FIVE_MINS_MS) {
-          try { remove(ref(rtdb, `rooms/${code}`)); } catch (e) {}
-          return;
-        }
-
-        // Public open rooms (less than max players and no password)
-        const maxP = r.mode === "cup" ? 4 : 2;
+        // Public open rooms (waiting for player 2 and no password)
+        const maxP = 2;
         if (pKeys.length < maxP && !r.password) {
           const hostPlayer = players[pKeys[0]] || {};
           openRooms.push({
             code,
             hostName: hostPlayer.displayName || "Host Player",
-            mode: r.mode || "duel",
+            mode: "1v1 DUEL",
             timerSec: r.turnTimerSeconds || 20,
             playerCount: pKeys.length,
-            maxP: maxP,
+            maxP: 2,
             createdAt: r.createdAt || Date.now()
           });
         }
