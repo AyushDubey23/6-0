@@ -802,15 +802,24 @@ function renderDraftPhase(viewport, roomCode, room) {
       timerInterval = null;
     }
     if (room.status === "drafting") {
-      const isHost = room.hostUid === currentUid || Object.keys(playersMap)[0] === currentUid;
-      if (isHost) {
-        updateRoomData(roomCode, {
-          status: "placing",
-          "draftState/activePlayerUid": null,
-          "draftState/turnDeadline": null,
-          "draftState/currentReveal": null
-        });
-      }
+      updateRoomData(roomCode, {
+        status: "placing",
+        "draftState/activePlayerUid": null,
+        "draftState/turnDeadline": null,
+        "draftState/currentReveal": null
+      });
+      viewport.innerHTML = `
+        <div class="text-center" style="margin-top: 10vh; padding: 2rem;">
+          <div style="display: inline-block; background: #C89B3C; color: #111111; font-weight: 900; font-size: 0.9rem; padding: 4px 14px; border: 2px solid #1E1E1E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1.5rem; box-shadow: 3px 3px 0px #1E1E1E;">
+            ★ DRAFT COMPLETE ★
+          </div>
+          <h2 style="font-size: 2.2rem; font-weight: 900; color: #111111;">Squads Fully Assembled!</h2>
+          <p style="color: var(--chalk-white-dim); margin-top: 0.75rem; font-weight: 700;">All 11 players drafted on the ground. Loading pitch lineups and match center...</p>
+          <div class="mt-4">
+            <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">Advancing to Playing XI...</span>
+          </div>
+        </div>
+      `;
     }
     return;
   }
@@ -1480,6 +1489,21 @@ function renderDraftPhase(viewport, roomCode, room) {
       updatedSlots[slotIdx] = targetPlayer;
       selectedDraftPlayerId = null;
 
+      // Immediately reflect the drafted player in memory and on the pitch DOM ground area
+      if (!room.squads) room.squads = {};
+      if (!room.squads[currentUid]) room.squads[currentUid] = {};
+      room.squads[currentUid].slots = updatedSlots;
+
+      const targetSlotEl = document.querySelector(`.pitch-player-slot[data-slot-index="${slotIdx}"]`);
+      if (targetSlotEl) {
+        targetSlotEl.classList.remove('empty');
+        targetSlotEl.classList.add('filled');
+        const avatar = targetSlotEl.querySelector('.player-avatar-circle');
+        if (avatar) avatar.textContent = targetPlayer.batRating || 75;
+        const namePlate = targetSlotEl.querySelector('.player-name-plate');
+        if (namePlate) namePlate.textContent = formatPlayerName(targetPlayer, true);
+      }
+
       const turnOrder = (draftState.turnOrder && draftState.turnOrder.length > 0)
         ? draftState.turnOrder
         : Object.keys(room.players || {});
@@ -1511,6 +1535,20 @@ function renderDraftPhase(viewport, roomCode, room) {
       });
 
       if (remainingNeedPicks.length === 0 || allRemainingAreBots) {
+        // Pre-compute user designations
+        const filledSlots = updatedSlots.filter(p => p !== null);
+        const cP = [...filledSlots].sort((a, b) => ((b.batRating || 0) + (b.bowlRating || 0)) - ((a.batRating || 0) + (a.bowlRating || 0)))[0];
+        const vcP = filledSlots.find(p => String(p.id) !== String(cP?.id)) || filledSlots[1];
+        const wkP = filledSlots.find(p => p.isWicketkeeper || p.isWK || String(p.role || '').toLowerCase().includes('keep')) || filledSlots[2];
+        const ar1P = filledSlots.find(p => String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40) || filledSlots[3];
+        const ar2P = filledSlots.find(p => String(p.id) !== String(ar1P?.id) && (String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40)) || filledSlots[4];
+
+        updates[`rooms/${roomCode}/squads/${currentUid}/captainId`] = cP?.id || "";
+        updates[`rooms/${roomCode}/squads/${currentUid}/viceCaptainId`] = vcP?.id || "";
+        updates[`rooms/${roomCode}/squads/${currentUid}/keeperId`] = wkP?.id || "";
+        updates[`rooms/${roomCode}/squads/${currentUid}/arBowler1Id`] = ar1P?.id || "";
+        updates[`rooms/${roomCode}/squads/${currentUid}/arBowler2Id`] = ar2P?.id || "";
+
         // If remaining participants needing picks are bots, fill their remaining slots immediately!
         if (allRemainingAreBots) {
           remainingNeedPicks.forEach(botUid => {
@@ -1531,7 +1569,34 @@ function renderDraftPhase(viewport, roomCode, room) {
                 }
               });
             }
-            updates[`rooms/${roomCode}/squads/${botUid}/slots`] = bSlots;
+
+            const botFilled = bSlots.filter(p => p !== null);
+            const botCP = [...botFilled].sort((a, b) => ((b.batRating || 0) + (b.bowlRating || 0)) - ((a.batRating || 0) + (a.bowlRating || 0)))[0];
+            const botVcP = botFilled.find(p => String(p.id) !== String(botCP?.id)) || botFilled[1];
+            const botWkP = botFilled.find(p => p.isWicketkeeper || p.isWK || String(p.role || '').toLowerCase().includes('keep')) || botFilled[2];
+            const botAr1P = botFilled.find(p => String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40) || botFilled[3];
+            const botAr2P = botFilled.find(p => String(p.id) !== String(botAr1P?.id) && (String(p.role || '').toLowerCase().includes('all') || (p.bowlRating || 0) >= 40)) || botFilled[4];
+
+            const updatedBotSlots = bSlots.map(p => {
+              if (!p) return null;
+              return {
+                ...p,
+                isCaptain: String(p.id) === String(botCP?.id),
+                isViceCaptain: String(p.id) === String(botVcP?.id),
+                isWicketkeeper: String(p.id) === String(botWkP?.id),
+                isWK: String(p.id) === String(botWkP?.id),
+                isArBowler1: String(p.id) === String(botAr1P?.id),
+                isArBowler2: String(p.id) === String(botAr2P?.id)
+              };
+            });
+
+            updates[`rooms/${roomCode}/squads/${botUid}/slots`] = updatedBotSlots;
+            updates[`rooms/${roomCode}/squads/${botUid}/ready`] = true;
+            updates[`rooms/${roomCode}/squads/${botUid}/captainId`] = botCP?.id || "";
+            updates[`rooms/${roomCode}/squads/${botUid}/viceCaptainId`] = botVcP?.id || "";
+            updates[`rooms/${roomCode}/squads/${botUid}/keeperId`] = botWkP?.id || "";
+            updates[`rooms/${roomCode}/squads/${botUid}/arBowler1Id`] = botAr1P?.id || "";
+            updates[`rooms/${roomCode}/squads/${botUid}/arBowler2Id`] = botAr2P?.id || "";
           });
         }
         updates[`rooms/${roomCode}/status`] = "placing";
@@ -1996,8 +2061,8 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
   const spectatorSquad = room.squads?.[spectatedUid] || { slots: Array(11).fill(null), bench: [], ready: false };
   const isOwnBoard = spectatedUid === currentUid;
   
-  const slots = spectatorSquad.slots || Array(11).fill(null);
-  const bench = spectatorSquad.bench || [];
+  const slots = getFilledSlotsArray(spectatorSquad.slots);
+  const bench = ensureArray(spectatorSquad.bench);
 
   // Zone classifications (4 compact rows)
   const zoneInfo = [
@@ -2055,7 +2120,8 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
   // Auto-lock CPU / bot squads during placing phase to prevent freezes
   const allPlayerUids = Object.keys(room.players || {});
   for (const pUid of allPlayerUids) {
-    if (pUid.includes("cpu") || pUid.includes("bot")) {
+    const isBot = pUid.includes("cpu") || pUid.includes("bot") || Boolean(room.players?.[pUid]?.isBot) || Boolean(room.players?.[pUid]?.isCpu);
+    if (isBot) {
       const botSquad = room.squads?.[pUid] || { slots: Array(11).fill(null), bench: [] };
       if (!botSquad.ready) {
         let botSlots = getFilledSlotsArray(botSquad.slots).filter(s => s !== null);
@@ -2134,8 +2200,9 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
       ${isOwnBoard && !spectatorSquad.ready ? `
         <div style="margin-bottom: 1rem;">
           ${totalPlaced === 11 ? `
-            <div class="validation-success-alert" style="background: rgba(46, 125, 50, 0.2); border: 1px solid #4caf50; color: #a5d6a7; padding: 0.75rem; border-radius: 8px;">
-              ✓ All 11 Playing XI Positions Filled! Select C, VC, and WK below to Lock.
+            <div class="validation-success-alert" style="background: #E8F5E9; border: 2px solid #2E7D32; color: #111111; padding: 0.85rem 1rem; border-radius: 0px; display: flex; justify-content: space-between; align-items: center; font-weight: 800; box-shadow: 2px 2px 0px #1E1E1E;">
+              <span>✓ All 11 Playing XI positions placed on the ground!</span>
+              <span style="font-size: 0.85rem; background: #2E7D32; color: #FFFFFF; padding: 3px 10px; border: 1.5px solid #1E1E1E; font-family: var(--font-family-mono);">Auto-locking in <strong id="auto-lock-countdown">5s</strong></span>
             </div>
           ` : `
             <div class="validation-error-alert" style="background: rgba(211, 47, 47, 0.2); border: 1px solid #ef5350; color: #ef9a9a; padding: 0.75rem; border-radius: 8px;">
@@ -2337,7 +2404,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
         if (!player) return;
 
         // Move back to bench
-        const rawSlots = spectatorSquad.slots || [];
+        const rawSlots = getFilledSlotsArray(spectatorSquad.slots);
         const currentSlots = Array(11).fill(null);
         for (let i = 0; i < 11; i++) {
           if (i !== slotIdx && rawSlots[i]) currentSlots[i] = rawSlots[i];
@@ -2459,6 +2526,11 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
 
     // Handle Lock XI click handler
     const handleLockSubmit = async () => {
+      if (window.placingAutoTimer) {
+        clearInterval(window.placingAutoTimer);
+        window.placingAutoTimer = null;
+      }
+
       const cId = capSelect?.value || spectatorSquad.captainId || effectiveCaptainId;
       const vcId = vcSelect?.value || spectatorSquad.viceCaptainId || effectiveViceCaptainId;
       const kId = keeperSelect?.value || spectatorSquad.keeperId || effectiveKeeperId;
@@ -2538,6 +2610,22 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
 
     document.getElementById("lock-squad-btn")?.addEventListener("click", handleLockSubmit);
     document.getElementById("lock-squad-btn-bottom")?.addEventListener("click", handleLockSubmit);
+
+    // Auto-advance timer: 5 seconds countdown to lock squad and begin match
+    let autoLockSec = 5;
+    const autoTimerBadge = document.getElementById("auto-lock-countdown");
+    if (autoTimerBadge && isFinalizable) {
+      if (window.placingAutoTimer) clearInterval(window.placingAutoTimer);
+      window.placingAutoTimer = setInterval(async () => {
+        autoLockSec--;
+        if (autoTimerBadge) autoTimerBadge.innerText = `${autoLockSec}s`;
+        if (autoLockSec <= 0) {
+          clearInterval(window.placingAutoTimer);
+          window.placingAutoTimer = null;
+          await handleLockSubmit();
+        }
+      }, 1000);
+    }
   }
 
   // Auto check if all players ready in placing phase
@@ -2693,6 +2781,14 @@ function renderTossPhase(viewport, roomCode, room) {
   const electBowlBtn = document.getElementById("elect-bowl-btn");
 
   const handleDecision = async (decision) => {
+    if (window.humanTossTimeout) {
+      clearTimeout(window.humanTossTimeout);
+      window.humanTossTimeout = null;
+    }
+    if (window.autoSpinTossTimeout) {
+      clearTimeout(window.autoSpinTossTimeout);
+      window.autoSpinTossTimeout = null;
+    }
     try {
       if (electBatBtn) electBatBtn.disabled = true;
       if (electBowlBtn) electBowlBtn.disabled = true;
@@ -2712,6 +2808,50 @@ function renderTossPhase(viewport, roomCode, room) {
 
   if (electBatBtn) electBatBtn.addEventListener("click", () => handleDecision("bat"));
   if (electBowlBtn) electBowlBtn.addEventListener("click", () => handleDecision("bowl"));
+
+  // Automatic decision handler if Toss Winner is a CPU / Bot
+  const isBotWinner = tossState.flipped && tossWinnerUid && (
+    tossWinnerUid.includes("cpu") ||
+    tossWinnerUid.includes("bot") ||
+    Boolean(players[tossWinnerUid]?.isBot) ||
+    Boolean(players[tossWinnerUid]?.isCpu)
+  );
+
+  if (isBotWinner && !tossState.decision && room.status === "toss") {
+    if (!window.botTossDecisionTimeout) {
+      window.botTossDecisionTimeout = setTimeout(async () => {
+        window.botTossDecisionTimeout = null;
+        try {
+          const decision = Math.random() < 0.5 ? "bat" : "bowl";
+          await update(ref(rtdb, `rooms/${roomCode}/tossState`), { decision });
+          showToast(`🪙 ${tossWinnerName} won the toss and elected to ${decision.toUpperCase()}!`);
+          await runClientSimulationFallback(roomCode, room, tossWinnerUid, decision);
+        } catch (e) {
+          console.warn("Bot toss decision error:", e);
+        }
+      }, 1600);
+    }
+  }
+
+  // Auto-flip fallback: if coin toss is not flipped after 6 seconds, auto-spin
+  if (!tossState.flipped && spinBtn && !window.autoSpinTossTimeout) {
+    window.autoSpinTossTimeout = setTimeout(() => {
+      window.autoSpinTossTimeout = null;
+      if (!tossState.flipped && spinBtn && !spinBtn.disabled) {
+        spinBtn.click();
+      }
+    }, 6000);
+  }
+
+  // Auto-decision fallback for human if inactive after winning toss (8 seconds)
+  if (tossState.flipped && tossWinnerUid && isTossWinner && !tossState.decision && !window.humanTossTimeout) {
+    window.humanTossTimeout = setTimeout(async () => {
+      window.humanTossTimeout = null;
+      if (!tossState.decision && room.status === "toss") {
+        await handleDecision("bat");
+      }
+    }, 8000);
+  }
 
   // Auto-launch simulation if toss decision is already recorded in RTDB
   if (tossState.flipped && tossState.winnerUid && tossState.decision && room.status === "toss") {
