@@ -802,36 +802,12 @@ function renderDraftPhase(viewport, roomCode, room) {
       timerInterval = null;
     }
     if (room.status === "drafting") {
-      const tossWinnerUid = participantUids[Math.floor(Math.random() * participantUids.length)] || currentUid;
-      const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
-
-      viewport.innerHTML = `
-        <div class="text-center" style="margin-top: 10vh; padding: 2rem;">
-          <div style="display: inline-block; background: #C89B3C; color: #111111; font-weight: 900; font-size: 0.9rem; padding: 4px 14px; border: 2px solid #1E1E1E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1.5rem; box-shadow: 3px 3px 0px #1E1E1E;">
-            ★ DRAFT COMPLETE ★
-          </div>
-          <h2 style="font-size: 2.2rem; font-weight: 900; color: #111111;">Squads Fully Assembled!</h2>
-          <p style="color: #444444; margin-top: 0.75rem; font-weight: 700;">All 11 players drafted on the ground. Loading pitch lineups and match center...</p>
-          <div class="mt-4">
-            <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">⚡ Entering Match Center Simulation...</span>
-          </div>
-        </div>
-      `;
-
       updateRoomData(roomCode, {
-        status: "simulating",
+        status: "placing",
         "draftState/activePlayerUid": null,
         "draftState/turnDeadline": null,
-        "draftState/currentReveal": null,
-        "tossState": {
-          flipped: true,
-          winnerUid: tossWinnerUid,
-          decision: tossDecision,
-          flippedBy: "system"
-        }
+        "draftState/currentReveal": null
       }).catch(e => console.warn("updateRoomData error:", e));
-
-      runClientSimulationFallback(roomCode, room, tossWinnerUid, tossDecision).catch(e => console.warn("runClientSimulationFallback error:", e));
     }
     return;
   }
@@ -842,10 +818,15 @@ function renderDraftPhase(viewport, roomCode, room) {
     activeUid === "cpu_opponent" ||
     (typeof activeUid === "string" && (activeUid.startsWith("cpu_") || activeUid.includes("bot")));
 
-  if (isBotPlayer) {
-    const isHost = room.hostUid === currentUid || Object.keys(room.players || {})[0] === currentUid;
-    if (isHost && !window.cpuTurnTimeout) {
-      window.cpuTurnTimeout = setTimeout(async () => {
+  const humanPlayerUids = Object.keys(room.players || {}).filter(uid => {
+    const p = (room.players || {})[uid] || {};
+    return !p.isBot && uid !== "cpu_opponent" && !uid.startsWith("cpu_") && !uid.includes("bot");
+  });
+  const isHost = room.hostUid === currentUid || humanPlayerUids[0] === currentUid || Object.keys(room.players || {})[0] === currentUid;
+
+  if (isBotPlayer && isHost) {
+    if (window.cpuTurnTimeout) clearTimeout(window.cpuTurnTimeout);
+    window.cpuTurnTimeout = setTimeout(async () => {
         window.cpuTurnTimeout = null;
         try {
           const botSquad = (room.squads || {})[activeUid] || { slots: Array(11).fill(null), bench: [] };
@@ -988,7 +969,6 @@ function renderDraftPhase(viewport, roomCode, room) {
         }
       }, 700);
     }
-  }
 
   // Play short whistle sound when it becomes your turn to roll/pick
   if (isActiveTurn && lastSignaledTurnUid !== currentUid) {
@@ -1547,7 +1527,7 @@ function renderDraftPhase(viewport, roomCode, room) {
       });
 
       if (remainingNeedPicks.length === 0 || allRemainingAreBots) {
-        // Pre-compute user designations
+        // Pre-compute user designations as initial selections for the Captain selection screen
         const filledSlots = updatedSlots.filter(p => p !== null);
         const cP = [...filledSlots].sort((a, b) => ((b.batRating || 0) + (b.bowlRating || 0)) - ((a.batRating || 0) + (a.bowlRating || 0)))[0];
         const vcP = filledSlots.find(p => String(p.id) !== String(cP?.id)) || filledSlots[1];
@@ -1568,25 +1548,14 @@ function renderDraftPhase(viewport, roomCode, room) {
           };
         });
 
+        // Save suggestions but keep ready: false so user confirms and locks on Captain screen
         updates[`rooms/${roomCode}/squads/${currentUid}/slots`] = finalizedUserSlots;
-        updates[`rooms/${roomCode}/squads/${currentUid}/ready`] = true;
+        updates[`rooms/${roomCode}/squads/${currentUid}/ready`] = false;
         updates[`rooms/${roomCode}/squads/${currentUid}/captainId`] = cP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/viceCaptainId`] = vcP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/keeperId`] = wkP?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/arBowler1Id`] = ar1P?.id || "";
         updates[`rooms/${roomCode}/squads/${currentUid}/arBowler2Id`] = ar2P?.id || "";
-
-        const mergedSquads = { ...(room.squads || {}) };
-        mergedSquads[currentUid] = {
-          ...(mergedSquads[currentUid] || {}),
-          slots: finalizedUserSlots,
-          ready: true,
-          captainId: cP?.id || "",
-          viceCaptainId: vcP?.id || "",
-          keeperId: wkP?.id || "",
-          arBowler1Id: ar1P?.id || "",
-          arBowler2Id: ar2P?.id || ""
-        };
 
         // If remaining participants needing picks are bots, fill their remaining slots immediately!
         if (allRemainingAreBots) {
@@ -1636,70 +1605,14 @@ function renderDraftPhase(viewport, roomCode, room) {
             updates[`rooms/${roomCode}/squads/${botUid}/keeperId`] = botWkP?.id || "";
             updates[`rooms/${roomCode}/squads/${botUid}/arBowler1Id`] = botAr1P?.id || "";
             updates[`rooms/${roomCode}/squads/${botUid}/arBowler2Id`] = botAr2P?.id || "";
-
-            mergedSquads[botUid] = {
-              slots: updatedBotSlots,
-              ready: true,
-              captainId: botCP?.id || "",
-              viceCaptainId: botVcP?.id || "",
-              keeperId: botWkP?.id || "",
-              arBowler1Id: botAr1P?.id || "",
-              arBowler2Id: botAr2P?.id || ""
-            };
           });
         }
 
+        // Clean draft state and transition to placing phase (Captain selection screen)
         updates[`rooms/${roomCode}/draftState/activePlayerUid`] = null;
         updates[`rooms/${roomCode}/draftState/turnDeadline`] = null;
         updates[`rooms/${roomCode}/draftState/currentReveal`] = null;
-
-        const participantUids = (turnOrder && turnOrder.length > 0) ? turnOrder : Object.keys(room.players || {});
-        const allDone = participantUids.every(uid => {
-          if (uid === currentUid) return true;
-          if (allRemainingAreBots && remainingNeedPicks.includes(uid)) return true;
-          return mergedSquads[uid]?.ready;
-        });
-
-        if (allDone) {
-          const tossWinnerUid = participantUids[Math.floor(Math.random() * participantUids.length)] || currentUid;
-          const tossDecision = Math.random() < 0.5 ? "bat" : "bowl";
-          updates[`rooms/${roomCode}/tossState`] = {
-            flipped: true,
-            winnerUid: tossWinnerUid,
-            decision: tossDecision,
-            flippedBy: "system"
-          };
-          updates[`rooms/${roomCode}/status`] = "simulating";
-
-          viewport.innerHTML = `
-            <div class="text-center" style="margin-top: 10vh; padding: 2rem;">
-              <div style="display: inline-block; background: #C89B3C; color: #111111; font-weight: 900; font-size: 0.9rem; padding: 4px 14px; border: 2px solid #1E1E1E; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 1.5rem; box-shadow: 3px 3px 0px #1E1E1E;">
-                ★ DRAFT COMPLETE ★
-              </div>
-              <h2 style="font-size: 2.2rem; font-weight: 900; color: #111111;">Playing XI Finalized!</h2>
-              <p style="color: #444444; margin-top: 0.75rem; font-weight: 700;">Final player drafted. Launching match simulation engine...</p>
-              <div class="mt-4">
-                <span class="role-badge all-rounder" style="font-size: 0.9rem; padding: 6px 14px;">⚡ Entering Match Center Simulation...</span>
-              </div>
-            </div>
-          `;
-
-          try {
-            await updateRoomData(roomCode, updates);
-            const simulatedRoom = {
-              ...room,
-              squads: mergedSquads,
-              tossState: { flipped: true, winnerUid: tossWinnerUid, decision: tossDecision }
-            };
-            await runClientSimulationFallback(roomCode, simulatedRoom, tossWinnerUid, tossDecision);
-            showToast(`Drafted ${formatPlayerName(targetPlayer)} into Playing XI! Launching match simulation!`);
-            return;
-          } catch (simErr) {
-            console.error("Simulation launch error:", simErr);
-          }
-        } else {
-          updates[`rooms/${roomCode}/status`] = "placing";
-        }
+        updates[`rooms/${roomCode}/status`] = "placing";
       } else {
         // Find next human participant who needs picks
         let nextTurnIndex = currentTurnIndex;
@@ -1816,13 +1729,25 @@ function renderDraftPhase(viewport, roomCode, room) {
       
       timerBadge.innerText = `${secondsLeft}s`;
 
-      const isHost = room.hostUid === currentUid || Object.keys(room.players || {})[0] === currentUid;
+      const humanPlayerUids = Object.keys(room.players || {}).filter(uid => {
+        const p = (room.players || {})[uid] || {};
+        return !p.isBot && uid !== "cpu_opponent" && !uid.startsWith("cpu_") && !uid.includes("bot");
+      });
+      const isHost = room.hostUid === currentUid || humanPlayerUids[0] === currentUid || Object.keys(room.players || {})[0] === currentUid;
       const activeIsBot = Boolean(activePlayerObj.isBot) ||
         activeUid === "cpu_opponent" ||
         (typeof activeUid === "string" && (activeUid.startsWith("cpu_") || activeUid.includes("bot")));
-      const canActOnTimeout = isActiveTurn || (isHost && activeIsBot);
 
-      if (secondsLeft <= 0 && canActOnTimeout && !isAutoPicking) {
+      const isExpired = remainingMs <= 0;
+      const isGraceExpiredHost = remainingMs <= -1200 && isHost;
+      const isFailsafeExpiredAny = remainingMs <= -3000;
+
+      const canActOnTimeout = (isActiveTurn && isExpired) || 
+                              (activeIsBot && (isHost || isExpired)) || 
+                              isGraceExpiredHost || 
+                              isFailsafeExpiredAny;
+
+      if (canActOnTimeout && !isAutoPicking) {
         // Timer expired — auto-assign a random player from reveal (or auto-roll if unrolled)
         isAutoPicking = true;
         if (timerInterval) {
@@ -1954,6 +1879,8 @@ function renderDraftPhase(viewport, roomCode, room) {
             if (remainingNeedPicks.length === 0) {
               updates[`rooms/${roomCode}/status`] = "placing";
               updates[`rooms/${roomCode}/draftState/activePlayerUid`] = null;
+              updates[`rooms/${roomCode}/draftState/turnDeadline`] = null;
+              updates[`rooms/${roomCode}/draftState/currentReveal`] = null;
             } else {
               let nextTurnIndex = currentTurnIndex;
               let nextActiveUid = remainingNeedPicks[0];
@@ -1990,6 +1917,8 @@ function renderDraftPhase(viewport, roomCode, room) {
             if (remainingNeedPicks.length === 0) {
               updates[`rooms/${roomCode}/status`] = "placing";
               updates[`rooms/${roomCode}/draftState/activePlayerUid`] = null;
+              updates[`rooms/${roomCode}/draftState/turnDeadline`] = null;
+              updates[`rooms/${roomCode}/draftState/currentReveal`] = null;
             } else {
               let nextTurnIndex = currentTurnIndex;
               let nextActiveUid = remainingNeedPicks[0];
@@ -2300,7 +2229,7 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
           ${totalPlaced === 11 ? `
             <div class="validation-success-alert" style="background: #E8F5E9; border: 2px solid #2E7D32; color: #111111; padding: 0.85rem 1rem; border-radius: 0px; display: flex; justify-content: space-between; align-items: center; font-weight: 800; box-shadow: 2px 2px 0px #1E1E1E;">
               <span>✓ All 11 Playing XI positions placed on the ground!</span>
-              <span style="font-size: 0.85rem; background: #2E7D32; color: #FFFFFF; padding: 3px 10px; border: 1.5px solid #1E1E1E; font-family: var(--font-family-mono);">Auto-locking in <strong id="auto-lock-countdown">5s</strong></span>
+              <span style="font-size: 0.85rem; background: #2E7D32; color: #FFFFFF; padding: 3px 10px; border: 1.5px solid #1E1E1E; font-family: var(--font-family-mono);">Auto-locking in <strong id="auto-lock-countdown">30s</strong></span>
             </div>
           ` : `
             <div class="validation-error-alert" style="background: rgba(211, 47, 47, 0.2); border: 1px solid #ef5350; color: #ef9a9a; padding: 0.75rem; border-radius: 8px;">
@@ -2711,8 +2640,8 @@ async function renderPlacingPhase(viewport, roomCode, room, spectatedUid, setSpe
     document.getElementById("lock-squad-btn")?.addEventListener("click", handleLockSubmit);
     document.getElementById("lock-squad-btn-bottom")?.addEventListener("click", handleLockSubmit);
 
-    // Auto-advance timer: 2 seconds countdown to lock squad and begin match
-    let autoLockSec = 2;
+    // Auto-advance timer: 30 seconds countdown to lock squad and begin match
+    let autoLockSec = 30;
     const autoTimerBadge = document.getElementById("auto-lock-countdown");
     if (autoTimerBadge && isFinalizable) {
       if (window.placingAutoTimer) clearInterval(window.placingAutoTimer);
